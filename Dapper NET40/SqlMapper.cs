@@ -738,7 +738,7 @@ namespace Dapper
             typeMap[typeof(TimeSpan?)] = DbType.Time;
             typeMap[typeof(object)] = DbType.Object;
 #if !DNXCORE50
-            AddTypeHandlerImpl(typeof(DataTable), new DataTableHandler(), false);
+            AddTypeHandlerImpl(typeof (DataTable), new DataTableHandler(), false, false);
 #endif
         }
 
@@ -749,7 +749,7 @@ namespace Dapper
         {
             typeHandlers = new Dictionary<Type, ITypeHandler>();
 #if !DNXCORE50
-            AddTypeHandlerImpl(typeof(DataTable), new DataTableHandler(), true);
+            AddTypeHandlerImpl(typeof(DataTable), new DataTableHandler(), true,false);
 #endif
         }
         /// <summary>
@@ -773,16 +773,18 @@ namespace Dapper
         /// </summary>
         public static void AddTypeHandler(Type type, ITypeHandler handler)
         {
-            AddTypeHandlerImpl(type, handler, true);
+            AddTypeHandlerImpl(type, handler, true, false);
         }
+
+        internal static Dictionary<Type,bool> forcedHandlers = new Dictionary<Type, bool>();
 
         /// <summary>
         /// Configure the specified type to be processed by a custom handler
         /// </summary>
-        public static void AddTypeHandlerImpl(Type type, ITypeHandler handler, bool clone)
+        public static void AddTypeHandlerImpl(Type type, ITypeHandler handler, bool clone, bool forceRaise)
         {
             if (type == null) throw new ArgumentNullException("type");
-
+            
             Type secondary = null;
             if(type.IsValueType())
             {
@@ -798,7 +800,7 @@ namespace Dapper
                     type = underlying; // the T
                 }
             }
-
+            forcedHandlers[type] = forceRaise;
             var snapshot = typeHandlers;
             ITypeHandler oldValue;
             if (snapshot.TryGetValue(type, out oldValue) && handler == oldValue) return; // nothing to do
@@ -809,6 +811,7 @@ namespace Dapper
             typeof(TypeHandlerCache<>).MakeGenericType(type).GetMethod("SetHandler", BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, new object[] { handler });
             if(secondary != null)
             {
+                forcedHandlers[secondary] = forceRaise;
                 typeof(TypeHandlerCache<>).MakeGenericType(secondary).GetMethod("SetHandler", BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, new object[] { handler });
             }
 #pragma warning restore 618
@@ -830,8 +833,22 @@ namespace Dapper
         /// </summary>
         public static void AddTypeHandler<T>(TypeHandler<T> handler)
         {
-            AddTypeHandlerImpl(typeof(T), handler, true);
+            AddTypeHandlerImpl(typeof(T), handler, true, false);
         }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="handler"></param>
+        /// <param name="clone"></param>
+        /// <param name="forceRaise"></param>
+        /// <typeparam name="T"></typeparam>
+        public static void AddTypeHandler<T>(TypeHandler<T> handler, bool clone, bool forceRaise)
+        {
+            AddTypeHandlerImpl(typeof(T), handler, true, true);
+        }
+
+       
 
         /// <summary>
         /// Not intended for direct usage
@@ -873,6 +890,7 @@ namespace Dapper
         }
 
         private static Dictionary<Type, ITypeHandler> typeHandlers = new Dictionary<Type, ITypeHandler>();
+        private static Dictionary<Type, ITypeHandler> customTypeHandlers = new Dictionary<Type, ITypeHandler>();
 
         internal const string LinqBinary = "System.Data.Linq.Binary";
 
@@ -894,10 +912,15 @@ namespace Dapper
         }
         internal static DbType LookupDbType(Type type, string name, bool demand, out ITypeHandler handler)
         {
+            Type sourceType = type;
+            bool forceRaise = forcedHandlers.ContainsKey(type);
             DbType dbType;
             handler = null;
             var nullUnderlyingType = Nullable.GetUnderlyingType(type);
             if (nullUnderlyingType != null) type = nullUnderlyingType;
+            if (forceRaise)
+                typeHandlers.TryGetValue(type, out handler);
+
             if (type.IsEnum() && !typeMap.ContainsKey(type))
             {
                 type = Enum.GetUnderlyingType(type);
@@ -908,13 +931,15 @@ namespace Dapper
             }
             if (type.FullName == LinqBinary)
             {
+                //dbType = DbType.Binary;
                 return DbType.Binary;
             }
-            if (typeHandlers.TryGetValue(type, out handler))
+            else if (typeHandlers.TryGetValue(type, out handler))
             {
+                //dbType = DbType.Object;
                 return DbType.Object;
             }
-            if (typeof(IEnumerable).IsAssignableFrom(type))
+            else if (typeof(IEnumerable).IsAssignableFrom(type))
             {
                 return DynamicParameters.EnumerableMultiParameter;
             }
@@ -3127,6 +3152,8 @@ this IDbConnection cnn, string sql, Func<TFirst, TSecond, TThird, TFourth, TRetu
                 }
                 ITypeHandler handler;
                 DbType dbType = LookupDbType(prop.PropertyType, prop.Name, true, out handler);
+                ITypeHandler customHandler=null;
+                typeHandlers.TryGetValue(prop.PropertyType, out handler);
                 if (dbType == DynamicParameters.EnumerableMultiParameter)
                 {
                     // this actually represents special handling for list types;
@@ -3244,6 +3271,10 @@ this IDbConnection cnn, string sql, Func<TFirst, TSecond, TThird, TFourth, TRetu
 #pragma warning disable 618
                     il.Emit(OpCodes.Call, typeof(TypeHandlerCache<>).MakeGenericType(prop.PropertyType).GetMethod("SetValue")); // stack is now [parameters] [[parameters]] [parameter]
 #pragma warning restore 618
+                }
+                else if (customHandler != null)
+                {
+                    
                 }
                 else
                 {

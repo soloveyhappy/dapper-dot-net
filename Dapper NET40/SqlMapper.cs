@@ -3152,8 +3152,6 @@ this IDbConnection cnn, string sql, Func<TFirst, TSecond, TThird, TFourth, TRetu
                 }
                 ITypeHandler handler;
                 DbType dbType = LookupDbType(prop.PropertyType, prop.Name, true, out handler);
-                ITypeHandler customHandler=null;
-                typeHandlers.TryGetValue(prop.PropertyType, out handler);
                 if (dbType == DynamicParameters.EnumerableMultiParameter)
                 {
                     // this actually represents special handling for list types;
@@ -3271,10 +3269,6 @@ this IDbConnection cnn, string sql, Func<TFirst, TSecond, TThird, TFourth, TRetu
 #pragma warning disable 618
                     il.Emit(OpCodes.Call, typeof(TypeHandlerCache<>).MakeGenericType(prop.PropertyType).GetMethod("SetValue")); // stack is now [parameters] [[parameters]] [parameter]
 #pragma warning restore 618
-                }
-                else if (customHandler != null)
-                {
-                    
                 }
                 else
                 {
